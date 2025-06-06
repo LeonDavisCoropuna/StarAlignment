@@ -1,0 +1,373 @@
+#include "Aligner.h"
+#include <algorithm> // std::max
+#include <iostream>
+
+Aligner::AlignmentResult Aligner::needlemanWunsch(
+    const Sequence& seq1, 
+    const Sequence& seq2, 
+    const ScoreMatrix& matrix)
+{
+    size_t n = seq1.getLength() + 1;
+    size_t m = seq2.getLength() + 1;
+
+    // Matrices de puntuación y direcciones
+    std::vector<std::vector<int>> score_matrix(n, std::vector<int>(m, 0));
+    std::vector<std::vector<char>> direction_matrix(n, std::vector<char>(m, '0'));
+
+    int gap = matrix.getGapPenalty();
+
+    // Inicializar primera fila y columna
+    for (size_t i = 1; i < n; ++i) {
+        score_matrix[i][0] = score_matrix[i - 1][0] + gap;
+        direction_matrix[i][0] = 'U'; // Up
+    }
+    for (size_t j = 1; j < m; ++j) {
+        score_matrix[0][j] = score_matrix[0][j - 1] + gap;
+        direction_matrix[0][j] = 'L'; // Left
+    }
+
+    // Llenar la matriz
+    for (size_t i = 1; i < n; ++i) {
+        for (size_t j = 1; j < m; ++j) {
+            char a = seq1[i - 1];
+            char b = seq2[j - 1];
+
+            int match = score_matrix[i - 1][j - 1] + matrix.getScore(a, b);
+            int delete_ = score_matrix[i - 1][j] + gap;
+            int insert = score_matrix[i][j - 1] + gap;
+
+            int maxScore = std::max({match, delete_, insert});
+            score_matrix[i][j] = maxScore;
+
+            if (maxScore == match) direction_matrix[i][j] = 'D'; // Diagonal
+            else if (maxScore == delete_) direction_matrix[i][j] = 'U'; // Up
+            else direction_matrix[i][j] = 'L'; // Left
+        }
+    }
+
+    // Backtracking
+    std::string aligned1, aligned2;
+    traceback(score_matrix, direction_matrix, seq1, seq2, aligned1, aligned2);
+
+    return {aligned1, aligned2, score_matrix[n - 1][m - 1]};
+}
+
+void Aligner::traceback(
+    const std::vector<std::vector<int>>& score_matrix,
+    const std::vector<std::vector<char>>& direction_matrix,
+    const Sequence& seq1,
+    const Sequence& seq2,
+    std::string& aligned1,
+    std::string& aligned2)
+{
+    size_t i = seq1.getLength();
+    size_t j = seq2.getLength();
+
+    while (i > 0 || j > 0) {
+        if (i > 0 && j > 0 && direction_matrix[i][j] == 'D') {
+            aligned1 += seq1[i - 1];
+            aligned2 += seq2[j - 1];
+            --i; --j;
+        } else if (i > 0 && direction_matrix[i][j] == 'U') {
+            aligned1 += seq1[i - 1];
+            aligned2 += '-';
+            --i;
+        } else if (j > 0 && direction_matrix[i][j] == 'L') {
+            aligned1 += '-';
+            aligned2 += seq2[j - 1];
+            --j;
+        }
+    }
+
+    // El alineamiento se construye al revés
+    std::reverse(aligned1.begin(), aligned1.end());
+    std::reverse(aligned2.begin(), aligned2.end());
+}
+#include "FastaReader.h"
+#include <fstream>
+#include <sstream>
+#include <string>
+#include <algorithm>
+
+std::string cleanLine(const std::string &line)
+{
+  std::string result = line;
+  result.erase(std::remove(result.begin(), result.end(), '\r'), result.end());
+  return result;
+}
+
+std::vector<Sequence> FastaReader::readFastaFile(const std::string &filename)
+{
+  std::vector<Sequence> sequences;
+  std::ifstream infile(filename);
+  if (!infile)
+    return sequences;
+
+  std::string line, id, content;
+  while (std::getline(infile, line))
+  {
+    line = cleanLine(line);
+
+    if (line.empty())
+      continue;
+    if (line[0] == '>')
+    {
+      if (!id.empty())
+      {
+        sequences.emplace_back(id, content);
+        content.clear();
+      }
+      id = line.substr(1); // Skip '>'
+    }
+    else
+    {
+      content += line;
+    }
+  }
+  if (!id.empty())
+  {
+    sequences.emplace_back(id, content);
+  }
+  return sequences;
+}
+#include <iostream>
+#include <fstream>
+#include "Sequence.h"
+#include "ScoreMatrix.h"
+#include "StarAlignment.h"
+
+using namespace std;
+
+vector<Sequence> loadSequences(const string& filename) {
+    vector<Sequence> sequences;
+    ifstream file(filename);
+    string line, id, data;
+    
+    while (getline(file, line)) {
+        if (line.empty()) continue;
+        if (line[0] == '>') {
+            if (!id.empty()) {
+                sequences.emplace_back(id, data);
+                data.clear();
+            }
+            id = line.substr(1);
+        } else {
+            data += line;
+        }
+    }
+    
+    if (!id.empty()) {
+        sequences.emplace_back(id, data);
+    }
+    
+    return sequences;
+}
+
+int main(int argc, char* argv[]) {
+    if (argc != 3) {
+        cerr << "Usage: " << argv[0] << " <sequences_file> <scores_file>\n";
+        return 1;
+    }
+    
+    try {
+        // Load data
+        auto sequences = loadSequences(argv[1]);
+        ScoreMatrix score_matrix(argv[2]);
+        
+        // Perform star alignment
+        auto alignment = StarAlignment::align(sequences, score_matrix);
+        
+        // Output results
+        cout << "Star Alignment Results:\n";
+        for (const auto& seq : alignment) {
+            cout << seq << "\n";
+        }
+        
+    } catch (const exception& e) {
+        cerr << "Error: " << e.what() << "\n";
+        return 1;
+    }
+    
+    return 0;
+}#include "ScoreMatrix.h"
+#include <fstream>
+#include <sstream>
+#include <stdexcept>
+#include <cctype>
+
+ScoreMatrix::ScoreMatrix() : gapPenalty(-5) {
+    initializeDefaultMatrix();
+}
+
+ScoreMatrix::ScoreMatrix(const std::string& filename) : gapPenalty(-5) {
+    loadFromFile(filename);
+}
+
+void ScoreMatrix::loadFromFile(const std::string& filename) {
+    std::ifstream file(filename);
+    if (!file.is_open()) {
+        throw std::runtime_error("Could not open score matrix file");
+    }
+    
+    matrix.clear();
+    std::string line;
+    
+    // Read first line to get characters
+    std::getline(file, line);
+    std::stringstream ss(line);
+    std::vector<char> characters;
+    char c;
+    
+    while (ss >> c) {
+        characters.push_back(toupper(c));
+    }
+    
+    // Read remaining lines
+    while (std::getline(file, line)) {
+        if (line.empty()) continue;
+        
+        std::stringstream ss_line(line);
+        char row_char;
+        ss_line >> row_char;
+        row_char = toupper(row_char);
+        
+        int score;
+        size_t i = 0;
+        while (ss_line >> score) {
+            if (i >= characters.size()) {
+                throw std::runtime_error("Invalid file format");
+            }
+            matrix[row_char][characters[i]] = score;
+            i++;
+        }
+    }
+}
+
+int ScoreMatrix::getScore(char a, char b) const {
+    a = toupper(a);
+    b = toupper(b);
+    
+    try {
+        return matrix.at(a).at(b);
+    } catch (const std::out_of_range&) {
+        throw std::invalid_argument("Characters not found in score matrix");
+    }
+}
+
+int ScoreMatrix::getGapPenalty() const {
+    return gapPenalty;
+}
+
+void ScoreMatrix::setGapPenalty(int penalty) {
+    gapPenalty = penalty;
+}
+
+void ScoreMatrix::initializeDefaultMatrix() {
+    // Simple score matrix (can be replaced by file loading)
+    std::string nucleotides = "ACGT";
+    
+    for (char a : nucleotides) {
+        for (char b : nucleotides) {
+            matrix[a][b] = (a == b) ? 1 : -1;
+        }
+    }
+}#include "Sequence.h"
+#include <stdexcept>
+
+Sequence::Sequence(const std::string& id, const std::string& data) 
+    : identifier(id), data(data) {}
+
+std::string Sequence::getId() const {
+    return identifier;
+}
+
+std::string Sequence::getData() const {
+    return data;
+}
+
+size_t Sequence::getLength() const {
+    return data.length();
+}
+
+void Sequence::setId(const std::string& id) {
+    identifier = id;
+}
+
+void Sequence::setData(const std::string& data) {
+    this->data = data;
+}
+
+char Sequence::operator[](size_t index) const {
+    if (index >= data.length()) {
+        throw std::out_of_range("Index out of range in Sequence");
+    }
+    return data[index];
+}
+
+std::string Sequence::subsequence(size_t start, size_t length) const {
+    if (start + length > data.length()) {
+        throw std::out_of_range("Subsequence out of range");
+    }
+    return data.substr(start, length);
+}#include "StarAlignment.h"
+#include "Aligner.h"
+#include <limits>
+
+using namespace std;
+
+vector<string> StarAlignment::align(
+    const vector<Sequence>& sequences,
+    const ScoreMatrix& matrix) {
+    
+    if (sequences.empty()) return {};
+    
+    // Find center sequence
+    int center_index = findCenterSequence(sequences, matrix);
+    const Sequence& center = sequences[center_index];
+    
+    // Pairwise alignments with center
+    vector<Aligner::AlignmentResult> pairwise_results;
+    for (size_t i = 0; i < sequences.size(); ++i) {
+        if (i != static_cast<size_t>(center_index)) {
+            pairwise_results.push_back(
+                Aligner::needlemanWunsch(center, sequences[i], matrix));
+        }
+    }
+    
+    // Build multiple alignment (simple approach)
+    vector<string> result;
+    result.push_back(center.getData()); // Center sequence first
+    
+    for (const auto& alignment : pairwise_results) {
+        result.push_back(alignment.seq2_aligned);
+    }
+    
+    return result;
+}
+
+int StarAlignment::findCenterSequence(
+    const vector<Sequence>& sequences,
+    const ScoreMatrix& matrix) {
+    
+    int best_index = 0;
+    int best_total_score = numeric_limits<int>::min();
+    
+    for (size_t i = 0; i < sequences.size(); ++i) {
+        int total_score = 0;
+        
+        for (size_t j = 0; j < sequences.size(); ++j) {
+            if (i != j) {
+                auto result = Aligner::needlemanWunsch(
+                    sequences[i], sequences[j], matrix);
+                total_score += result.score;
+            }
+        }
+        
+        if (total_score > best_total_score) {
+            best_total_score = total_score;
+            best_index = i;
+        }
+    }
+    
+    return best_index;
+}

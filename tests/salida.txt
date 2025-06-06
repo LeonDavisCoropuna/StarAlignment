@@ -1,0 +1,210 @@
+#include <gtest/gtest.h>
+#include "Aligner.h"
+#include "Sequence.h"
+#include "ScoreMatrix.h"
+
+TEST(AlignerTest, NeedlemanWunschSimpleAlignment) {
+    Sequence seq1("seq1", "ACGT");
+    Sequence seq2("seq2", "ACGT");
+    ScoreMatrix matrix;
+
+    auto result = Aligner::needlemanWunsch(seq1, seq2, matrix);
+
+    EXPECT_EQ(result.seq1_aligned, "ACGT");
+    EXPECT_EQ(result.seq2_aligned, "ACGT");
+    EXPECT_EQ(result.score, 4); // 4 matches × 1
+}
+
+TEST(AlignerTest, NeedlemanWunschWithOneGap) {
+    Sequence seq1("seq1", "ACGT");
+    Sequence seq2("seq2", "AGT");
+    ScoreMatrix matrix;
+
+    auto result = Aligner::needlemanWunsch(seq1, seq2, matrix);
+
+    EXPECT_EQ(result.seq1_aligned, "ACGT");
+    EXPECT_EQ(result.seq2_aligned, "A-GT");
+    EXPECT_EQ(result.score, -2); // Match, gap, match, match = 1 -5 +1 +1 = -2
+}
+
+TEST(AlignerTest, NeedlemanWunschAllMismatches) {
+    Sequence seq1("seq1", "AAAA");
+    Sequence seq2("seq2", "TTTT");
+    ScoreMatrix matrix;
+
+    auto result = Aligner::needlemanWunsch(seq1, seq2, matrix);
+
+    EXPECT_EQ(result.seq1_aligned, "AAAA");
+    EXPECT_EQ(result.seq2_aligned, "TTTT");
+    EXPECT_EQ(result.score, -4); // 4 mismatches × -1
+}
+
+TEST(AlignerTest, NeedlemanWunschLeadingTrailingGaps) {
+    Sequence seq1("seq1", "CGT");
+    Sequence seq2("seq2", "ACGTG");
+    ScoreMatrix matrix;
+
+    auto result = Aligner::needlemanWunsch(seq1, seq2, matrix);
+
+    EXPECT_EQ(result.seq1_aligned.length(), result.seq2_aligned.length());
+    EXPECT_EQ(result.score, -7); // A gap (-5), C-G-T match (+3), G gap (-5) = -5 + 3 -5 = -7 (example, depends on positions)
+}
+
+TEST(AlignerTest, NeedlemanWunschEmptySequences) {
+    Sequence seq1("seq1", "");
+    Sequence seq2("seq2", "");
+    ScoreMatrix matrix;
+
+    auto result = Aligner::needlemanWunsch(seq1, seq2, matrix);
+
+    EXPECT_EQ(result.seq1_aligned, "");
+    EXPECT_EQ(result.seq2_aligned, "");
+    EXPECT_EQ(result.score, 0);
+}
+
+TEST(AlignerTest, NeedlemanWunschOneEmptySequence) {
+    Sequence seq1("seq1", "ACGT");
+    Sequence seq2("seq2", "");
+    ScoreMatrix matrix;
+
+    auto result = Aligner::needlemanWunsch(seq1, seq2, matrix);
+
+    EXPECT_EQ(result.seq2_aligned, "----");
+    EXPECT_EQ(result.seq1_aligned, "ACGT");
+    EXPECT_EQ(result.score, 4 * matrix.getGapPenalty()); // default is -5 → -20
+}
+#include <gtest/gtest.h>
+#include <fstream>
+#include <string>
+#include <vector>
+#include "Sequence.h"
+#include "FastaReader.h" // <- Aquí se espera que tengas una función o clase que lea archivos fasta
+
+// Mock del contenido .fasta para el test
+const std::string fastaContent =
+    ">Raton gi|6679863|ref|NP_032070.1| frataxin [Mus musculus]\n"
+    "MWAFGGRAAVGLLPRTASRASAWVGNPRWREPIVTCGRRGLHVTVNAGATRHAHLNLHYLQILNIKKQSV\n"
+    "CVVHLRNLGTLDNPSSLDETAYERLAEETLDSLAEFFEDLADKPYTLEDYDVSFGDGVLTIKLGGDLGTY\n"
+    "VINKQTPNKQIWLSSPSSGPKRYDWTGKNWVYSHDGVSLHELLARELTKALNTKLDLSSLAYSGKGT\n"
+    "\n"
+    ">Rata gi|109463707|ref|XP_001078791.1| PREDICTED: similar to Frataxin, mitochondrial precursor (Fxn) [Rattus norvegicus]\n"
+    "MWTFGRRAAAGLLPRTASRASAWVRNPRGRERIGTCGRRGLHVTANADAIRHSHLNLHYLGQILNIKKQS\n"
+    "VCVVHLRNSGTLGNPSSLDETAYERLAEETLDALAEFFEDLADKPYTLKDYDVSFGDGVLTIKLGGDLGT\n"
+    "YVINKQTPNKQIWLSSPSSGPKRYDWTGKNWVYSHDGVSLHELLARELTEALNTKLDLSSLAYSGKGT\n";
+
+TEST(FastaReaderTest, ReadMultipleSequences)
+{
+  // Crear archivo temporal de prueba
+  const std::string filename = "temp_test.fasta";
+  std::ofstream outFile(filename);
+  outFile << fastaContent;
+  outFile.close();
+
+  // Leer las secuencias desde el archivo
+  std::vector<Sequence> sequences = FastaReader::readFastaFile(filename);
+
+  ASSERT_EQ(sequences.size(), 2);
+
+  EXPECT_EQ(sequences[0].getId(), "Raton gi|6679863|ref|NP_032070.1| frataxin [Mus musculus]");
+  EXPECT_EQ(sequences[0].getData().substr(0, 9), "MWAFGGRAA");
+
+  EXPECT_EQ(sequences[1].getId(), "Rata gi|109463707|ref|XP_001078791.1| PREDICTED: similar to Frataxin, mitochondrial precursor (Fxn) [Rattus norvegicus]");
+  EXPECT_EQ(sequences[1].getData().substr(0, 9), "MWTFGRRAA"); // Fragmento inicial
+
+  // Eliminar archivo temporal
+  std::remove(filename.c_str());
+}
+
+TEST(FastaReaderTest, ReadRealFastaFile)
+{
+  // Ruta relativa al archivo fasta real
+  const std::string filename = "../data/frataxin_mamiferos.fasta";
+
+  // Leer las secuencias desde el archivo
+  std::vector<Sequence> sequences = FastaReader::readFastaFile(filename);
+
+  // Validación básica (puedes ajustar según contenido real del archivo)
+  ASSERT_GE(sequences.size(), 2); // Deben existir al menos 2 secuencias
+
+  // Verifica contenido si sabes cómo empieza
+  EXPECT_EQ(sequences[0].getId(), "Raton gi|6679863|ref|NP_032070.1| frataxin [Mus musculus]");
+  EXPECT_EQ(sequences[0].getData().substr(0, 9), "MWAFGGRAA");
+
+  EXPECT_EQ(sequences[1].getId(), "Rata gi|109463707|ref|XP_001078791.1| PREDICTED: similar to Frataxin, mitochondrial precursor (Fxn) [Rattus norvegicus]");
+  EXPECT_EQ(sequences[1].getData().substr(0, 9), "MWTFGRRAA");
+}#include <gtest/gtest.h>
+
+int main(int argc, char **argv) {
+    ::testing::InitGoogleTest(&argc, argv);
+    return RUN_ALL_TESTS();
+}#include <gtest/gtest.h>
+#include "ScoreMatrix.h"
+#include <fstream>
+#include <cstdio>
+#include "Aligner.h"
+
+TEST(ScoreMatrixTest, DefaultMatrix) {
+    ScoreMatrix matrix;
+    
+    EXPECT_EQ(matrix.getScore('A', 'A'), 1);
+    EXPECT_EQ(matrix.getScore('A', 'C'), -1);
+    EXPECT_EQ(matrix.getScore('T', 'T'), 1);
+    EXPECT_EQ(matrix.getGapPenalty(), -5);
+}
+
+TEST(ScoreMatrixTest, LoadFromFile) {
+    // Create temporary test file
+    const char* filename = "test_matrix.txt";
+    std::ofstream out(filename);
+    out << "A C G T\n"
+        << "A 1 -1 -1 -1\n"
+        << "C -1 1 -1 -1\n"
+        << "G -1 -1 1 -1\n"
+        << "T -1 -1 -1 1\n";
+    out.close();
+    
+    ScoreMatrix matrix(filename);
+    
+    EXPECT_EQ(matrix.getScore('A', 'A'), 1);
+    EXPECT_EQ(matrix.getScore('A', 'C'), -1);
+    EXPECT_EQ(matrix.getScore('G', 'T'), -1);
+    EXPECT_EQ(matrix.getScore('T', 'T'), 1);
+    
+    // Remove temporary file
+    std::remove(filename);
+}
+
+TEST(ScoreMatrixTest, GapPenalty) {
+    ScoreMatrix matrix;
+    matrix.setGapPenalty(-10);
+    EXPECT_EQ(matrix.getGapPenalty(), -10);
+}
+#include <gtest/gtest.h>
+#include "Sequence.h"
+
+TEST(SequenceTest, ConstructorAndGetters) {
+    Sequence seq("seq1", "ACGT");
+    
+    EXPECT_EQ(seq.getId(), "seq1");
+    EXPECT_EQ(seq.getData(), "ACGT");
+    EXPECT_EQ(seq.getLength(), 4);
+}
+
+TEST(SequenceTest, IndexOperator) {
+    Sequence seq("", "ACGT");
+    
+    EXPECT_EQ(seq[0], 'A');
+    EXPECT_EQ(seq[1], 'C');
+    EXPECT_EQ(seq[2], 'G');
+    EXPECT_EQ(seq[3], 'T');
+    
+    EXPECT_THROW(seq[4], std::out_of_range);
+}
+
+TEST(SequenceTest, Subsequence) {
+    Sequence seq("", "ACGTACGT");
+    
+    EXPECT_EQ(seq.subsequence(0, 4), "ACGT");
+    EXPECT_EQ(seq.subsequence(4, 4), "ACGT");
+    EXPECT_THROW(seq.subsequence(5, 4), std::out_of_range);
+}
